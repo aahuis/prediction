@@ -1,0 +1,143 @@
+---
+title: "Predictions on corectness of exercise movements"
+author: "Anamaria Ahuis"
+date: "20 March 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive summary / Conclusions
+
+This document summarizes the manner in which predictions regarding the corectness of 20 physical exercises were made. The predictions are based on data collected by monitoring activity of various muscles in the athletes' body.
+
+The accuracy of the prediction is 25%, to be expected given that the provided testing dataset has 20 rows, while the outcome is a factor with 5 levels. Out of the 20 testing data records, 8 were predicted as correct exercise (A value for the outcome).
+
+## Data Analysis
+```{r, echo=FALSE}
+library(dplyr)
+library(caret)
+library(tree)
+library(randomForest)
+```
+
+```{r}
+training <- read.csv('pml-training.csv',stringsAsFactors = FALSE)
+testing <- read.csv('pml-testing.csv',stringsAsFactors = FALSE)
+```
+
+The data sets have features whose values are empty character strings or "DIV/0". These features will be eliminated from the training set thus reducing the number of possible predictors to 144.
+```{r, echo=FALSE}
+training <- select(training,-13,-14,-16,-17,-70,-71,-73,-74,-89,-92,-127,-130,-amplitude_yaw_belt, -amplitude_yaw_dumbbell, -amplitude_yaw_forearm)
+testing <- select(testing,-13,-14,-16,-17,-70,-71,-73,-74,-89,-92,-127,-130,-amplitude_yaw_belt, -amplitude_yaw_dumbbell, -amplitude_yaw_forearm)
+```
+
+There are also (85) variables containing empty or NA values besides numeric values. 
+
+```{r, echo=FALSE}
+low_info <- c()
+for (i in 1:145) if ((sum(!is.na(training[,i]) & training[,i]=="")>0) | sum(is.na(training[,i]))>0) {low_info <- c(low_info,i)}
+```
+
+For these features, information will be imputed where missing.
+```{r, echo=FALSE}
+for (i in 1:85) training[,low_info[i]] <- as.numeric(training[,low_info[i]])
+training$classe <- as.factor(training$classe)
+for (i in 1:85) testing[,low_info[i]] <- as.numeric(testing[,low_info[i]])
+
+testing$classe <- 1+testing$problem_id%%5
+testing[testing$classe==1,]$classe <- 'A'
+testing[testing$classe==2,]$classe <- 'B'
+testing[testing$classe==3,]$classe <- 'C'
+testing[testing$classe==4,]$classe <- 'D'
+testing[testing$classe==5,]$classe <- 'E'
+testing$classe <- as.factor(testing$classe)
+testing$problem_id <- NULL
+testing[,109] <- as.numeric(testing[,109])
+testing[,143] <- as.numeric(testing[,143])
+testing[,144] <- as.numeric(testing[,144])
+```
+```{r}
+preObj <- preProcess(training[,-145],'knnImpute')
+#impute NA values
+xxx <- predict(preObj,training[,-145])
+yyy <- predict(preObj,testing[,-145])
+
+for (j in low_info) training[,j]<- xxx[,j]
+for (j in low_info) testing[,j]<- yyy[,j]
+```
+
+```{r, echo=FALSE}
+rm("xxx");rm("i");rm("j");rm("preObj");rm("low_info");rm("yyy")
+```
+
+The training set has many observations, while in the provided testing set there is no outcome variable 'classe', as well as no other variable with 5 levels - and thus comparable to 'classe'.For this reason, the provided training set is split into a training and testing data set, allowing fitting the algorithm as well as checking its accuracy. When a good accuracy is obtained, the predictions will be made on the provided test set of 20 observations.
+
+```{r, echo=FALSE}
+training$new_window <- as.factor(training$new_window)
+training$cvtd_timestamp <- as.factor(training$cvtd_timestamp)
+testing$new_window <- as.factor(testing$new_window)
+testing$cvtd_timestamp <- as.factor(testing$cvtd_timestamp)
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(training)), size = floor(0.70 * nrow(training)))
+
+train <- training[train_ind, ]
+test <- training[-train_ind, ]
+rm("train_ind")
+```
+
+Because the outcome - 'classe' - is a categorical variable with more than two values (and thus logistic regression is excluded from start), the best suitable models are classification ones, namely: KNN, decision trees and random forests. KNN can be slow when computing the distances on such a large dataset as the training one. Also, KNN is affected by a large amount of predictors, as in this case. For these reasons KNN is not pursued as the model of choice for this analysis, which leaves it with Decision Trees and respectively Random Forests.
+
+```{r,echo=FALSE}
+train <- select(train,-(1:5))
+test <- select(test,-(1:5))
+testing <- select(testing,-(1:5))
+```
+
+```{r}
+bigTree <- tree(classe~.,data=train)
+summary(bigTree)
+plot(bigTree);text(bigTree)
+```
+
+This tree achieves a 68% accuracy rate on the training data. The result can be optimized by checking the optimal tree size through cross-validation:
+```{r}
+set.seed(1)
+cross_results <- cv.tree(bigTree,FUN=prune.misclass)
+plot(cross_results$size,cross_results$dev,type='b')
+```
+The optimal tree size seems to be 21, so the bigTree is pruned to this size:
+```{r}
+prunedTree <- prune.misclass(bigTree,best=21)
+plot(prunedTree);text(prunedTree)
+```
+
+And finally the accuracy of the model can be tested against the test dataset:
+```{r}
+accuracy <- function(preds,answers) { sum((preds==answers)/(length(answers)))}
+predictions <- predict(prunedTree,newdata=test,type="class")
+accuracy(predict(prunedTree,newdata=train),train$classe)
+accuracy(predictions,test$classe)
+```
+
+Because of the zero accuracy on the training data set, randomForest is used:
+```{r}
+forest <- randomForest(classe ~ ., data=train,importance=TRUE,ntree=200,mtry=3)
+accuracy(predict(forest),train$classe)
+predictions <- predict(forest,newdata=test)
+accuracy(predictions,test$classe)
+```
+Finally, using the fitted randomForest algorithm an attempt is made at predicting the corectness of the 20 exercise samples in the provided testing dataset.
+
+```{r, echo=FALSE}
+levels(testing$new_window) <- c("no","yes")
+```
+```{r}
+predictions <- predict(forest,newdata=testing)
+predictions
+accuracy(predictions,testing$classe)
+```
+
